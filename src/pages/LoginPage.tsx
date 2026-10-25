@@ -104,6 +104,54 @@ export default function LoginPage() {
       <p className="text-label-sm" style={{ color: 'var(--outline)', textAlign: 'center', marginTop: '1.5rem', maxWidth: '20rem' }}>
         Sign in with your Google account to join or create a volunteer team.
       </p>
+
+      {/* About Section */}
+      <section
+        id="about-section"
+        aria-labelledby="about-section-heading"
+        style={{
+          marginTop: '2rem',
+          padding: '1.25rem',
+          background: 'var(--surface-container-lowest)',
+          borderRadius: '0.75rem',
+          border: '1px solid var(--outline-variant)',
+          maxWidth: '22rem',
+          width: '100%',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          textAlign: 'center',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 20, color: 'var(--primary)' }}>info</span>
+          <h2 id="about-section-heading" className="text-label-md" style={{ color: 'var(--on-surface)', fontWeight: 700, margin: 0, fontSize: 15 }}>
+            About Community Donation Tracker
+          </h2>
+        </div>
+        <p className="text-body-sm" style={{ color: 'var(--on-surface-variant)', marginBottom: '1rem', lineHeight: 1.5, textAlign: 'left' }}>
+          A field-tested coordination platform for volunteer campaigns, door-to-door donor outreach, and real-time contribution tracking.
+        </p>
+        <a
+          href="https://community-donation-tracker.vercel.app"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open Community Donation Tracker Live Demo in a new tab"
+          className="btn btn-secondary"
+          style={{
+            textDecoration: 'none',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.5rem',
+            width: '100%',
+            height: '2.5rem',
+            fontSize: '13px',
+            fontWeight: 600,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>open_in_new</span>
+          <span>Open Live Demo</span>
+        </a>
+      </section>
     </div>
   );
 }

@@ -1,5 +1,7 @@
 # Community Donation Tracker
 
+**Live Demo:** [Community Donation Tracker](https://community-donation-tracker.vercel.app)
+
 A modern, responsive web application designed for community organizers and field volunteer teams to coordinate donation campaigns, manage outreach contacts, and track collection progress in real time.
 
 Built with **React 19**, **TypeScript**, **Vite**, and **Firebase (Authentication & Cloud Firestore)**, featuring high-contrast UI design, team-scoped access control, duplicate person detection, and group organization.
@@ -14,7 +16,7 @@ Community fundraising drives and neighborhood outreach efforts frequently suffer
 - **Lack of team coordination** across field volunteers working concurrently in different blocks or neighborhoods.
 - **Loss of state & connectivity issues** during active on-ground volunteer workflows.
 
-The **Community Donation Tracker** solves these problems with a unified, real-time platform featuring team-isolated workspaces, smart duplicate warnings, dedicated groups, independent donor/inviter workflows, and one-click reporting.
+The **Community Donation Tracker** solves these problems with a unified, real-time platform featuring team-isolated workspaces, smart duplicate warnings, dedicated groups, independent donor/inviter workflows, and one-click reporting. Explore the live application at [https://community-donation-tracker.vercel.app](https://community-donation-tracker.vercel.app).
 
 ---
 
@@ -275,9 +277,10 @@ Donation amounts and community member records are sensitive information. Here is
 
 ## 🚀 Deployment to Vercel
 
-Production URL: [https://community-donation-tracker.vercel.app](https://community-donation-tracker.vercel.app)
-
-Configured for automatic continuous deployment from GitHub branch `main` with SPA client-side routing.
+- **Live Demo**: [https://community-donation-tracker.vercel.app](https://community-donation-tracker.vercel.app)
+- **Production URL**: `https://community-donation-tracker.vercel.app`
+- **Hosting Platform**: Vercel Edge Network
+- **CI/CD**: Configured for automatic continuous deployment from GitHub branch `main` with SPA client-side routing.
 
 ---
 

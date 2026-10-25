@@ -270,6 +270,83 @@ export default function TeamPage() {
           </button>
         </div>
       </div>
+
+      {/* About Community Donation Tracker Section */}
+      <section
+        id="about-section"
+        aria-labelledby="about-section-heading"
+        style={{
+          background: 'var(--surface-container-lowest)',
+          borderRadius: '0.75rem',
+          padding: '1.25rem',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+          border: '1px solid var(--outline-variant)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 22, color: 'var(--primary)' }}>info</span>
+            <h2 id="about-section-heading" className="text-label-md" style={{ color: 'var(--on-surface)', fontWeight: 700, margin: 0, fontSize: 16 }}>
+              About Community Donation Tracker
+            </h2>
+          </div>
+          <span style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            padding: '0.125rem 0.5rem',
+            borderRadius: '9999px',
+            background: 'var(--surface-container-high)',
+            color: 'var(--on-surface-variant)',
+          }}>
+            v1.0.0 • Production
+          </span>
+        </div>
+
+        <p className="text-body-sm" style={{ color: 'var(--on-surface-variant)', lineHeight: 1.6, marginBottom: '1rem' }}>
+          A modern, responsive field coordination platform designed for community organizers and field volunteer teams. Manage door-to-door donation drives, track outreach contacts in real time, record contributions in Indian Rupees (INR), and organize field operations by groups and locations.
+        </p>
+
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0.75rem',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingTop: '0.75rem',
+          borderTop: '1px solid var(--outline-variant)',
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+            <span className="text-label-sm" style={{ color: 'var(--on-surface)', fontWeight: 600 }}>
+              Live Production Deployment
+            </span>
+            <span className="text-body-sm" style={{ color: 'var(--outline)', fontSize: '12px' }}>
+              community-donation-tracker.vercel.app
+            </span>
+          </div>
+
+          <a
+            href="https://community-donation-tracker.vercel.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open Community Donation Tracker Live Demo in a new tab"
+            className="btn btn-primary"
+            style={{
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              height: '2.5rem',
+              padding: '0 1rem',
+              fontSize: '13px',
+              fontWeight: 600,
+              borderRadius: '0.5rem',
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>open_in_new</span>
+            <span>Live Demo</span>
+          </a>
+        </div>
+      </section>
     </div>
   );
 }
