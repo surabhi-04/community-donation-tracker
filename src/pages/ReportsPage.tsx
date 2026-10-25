@@ -3,7 +3,7 @@ import { useTeam } from '../contexts/TeamContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import type { Person } from '../types';
-import { normalizeLocationForDisplay, isPersonDonor, isPersonInviter } from '../types';
+import { normalizeLocationForDisplay, isPersonDonor, isPersonInviter, formatINR } from '../types';
 
 // ── CSV Export ──────────────────────────────────────────────────
 function escapeCsv(value: string): string {
@@ -27,9 +27,11 @@ function buildCsv(people: Person[]): string {
   const BOM = '\uFEFF';
   const headers = [
     'Name', 'Phone', 'Location', 'Group',
-    'Role', 'Donation Status', 'Donation Collected',
+    'Role', 'Donation Status', 'Donation Collected', 'Amount Donated (INR)',
     'Invitation Status', 'Created By', 'Created At', 'Updated At',
   ];
+
+  let totalAmountSum = 0;
 
   const rows = people.map((p) => {
     const isDonor = isPersonDonor(p);
@@ -54,6 +56,20 @@ function buildCsv(people: Person[]): string {
       ? p.status === 'collected' ? 'Yes' : 'No'
       : 'N/A';
 
+    let amountStr = 'N/A';
+    if (isDonor) {
+      if (p.status === 'collected') {
+        if (typeof p.amount === 'number' && p.amount > 0) {
+          amountStr = p.amount.toFixed(2);
+          totalAmountSum += p.amount;
+        } else {
+          amountStr = 'Amount not recorded';
+        }
+      } else {
+        amountStr = '0.00';
+      }
+    }
+
     const inviterStatusLabel = isInviter
       ? (p.inviterStatus === 'confirmed'
         ? 'CONFIRMED'
@@ -71,6 +87,7 @@ function buildCsv(people: Person[]): string {
       escapeCsv(roleLabel),
       escapeCsv(donationStatusLabel),
       donationCollected,
+      escapeCsv(amountStr),
       escapeCsv(inviterStatusLabel),
       escapeCsv(p.createdByName || ''),
       escapeCsv(formatTimestamp(p.createdAt)),
@@ -78,7 +95,14 @@ function buildCsv(people: Person[]): string {
     ];
   });
 
-  return BOM + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+  // Summary Row at the bottom of CSV
+  const summaryRow = [
+    'TOTAL RECORDED AMOUNT (INR)', '', '', '', '', '', '',
+    totalAmountSum.toFixed(2),
+    '', '', '', '',
+  ];
+
+  return BOM + [headers.join(','), ...rows.map((r) => r.join(',')), summaryRow.join(',')].join('\r\n');
 }
 
 function downloadCsv(content: string, filename: string) {
@@ -150,8 +174,13 @@ export default function ReportsPage() {
     const confirmedInvitations = inviters.filter((p) => p.inviterStatus === 'confirmed').length;
     const invitedPending = inviters.filter((p) => p.inviterStatus === 'invited').length;
 
+    const totalAmount = donors
+      .filter((p) => p.status === 'collected' && typeof p.amount === 'number' && p.amount > 0)
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+
     return {
       total, collected, visited, pending, visitedPct, collectedPct, pendingPct,
+      totalAmount,
       totalInvitations, confirmedInvitations, invitedPending,
     };
   }, [people]);
@@ -231,6 +260,31 @@ export default function ReportsPage() {
               <span className="material-symbols-outlined" style={{ fontSize: 20, color: 'var(--secondary)' }}>table_view</span>
               Export CSV
             </button>
+          </div>
+        </section>
+
+        {/* Total Collection Hero Card */}
+        <section style={{
+          background: 'linear-gradient(135deg, #00513B 0%, #006C4E 100%)',
+          color: '#ffffff',
+          borderRadius: '0.75rem',
+          padding: '1rem 1.25rem',
+          boxShadow: '0 2px 8px rgba(0, 108, 78, 0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <div>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.85)' }}>
+              Total Collections (INR)
+            </span>
+            <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+              {formatINR(stats.totalAmount, { showZero: true })}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right', fontSize: 12, color: 'rgba(255,255,255,0.9)' }}>
+            <div><strong>{stats.collected}</strong> collections verified</div>
+            <div><strong>{stats.total}</strong> total donor contacts</div>
           </div>
         </section>
 
@@ -394,7 +448,7 @@ interface PrintReportProps {
   team: { name: string; id: string } | null;
   reportDate: string;
   locationStats: { location: string; total: number; collected: number; visited: number; pending: number }[];
-  stats: { total: number; collected: number; visited: number; pending: number; collectedPct: string };
+  stats: { total: number; collected: number; visited: number; pending: number; collectedPct: string; totalAmount?: number };
   user: { displayName?: string | null; email?: string | null } | null;
 }
 
@@ -423,16 +477,17 @@ function PrintReport({ people, team, reportDate, locationStats, stats, user }: P
       </div>
 
       {/* Stats Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px', marginBottom: '14px' }}>
         {[
           { label: 'Total Donors', val: stats.total },
           { label: 'Donations Collected', val: stats.collected },
+          { label: 'Total Collected (INR)', val: formatINR(stats.totalAmount, { showZero: true }) },
           { label: 'Visited (Follow-up)', val: stats.visited },
           { label: 'Pending Visits', val: stats.pending },
         ].map((s) => (
           <div key={s.label} style={{ border: '1px solid #e2e8f0', borderRadius: 4, padding: '8px', textAlign: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: '#0b1c30' }}>{s.val}</div>
-            <div style={{ fontSize: 9, color: '#45464d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#0b1c30' }}>{s.val}</div>
+            <div style={{ fontSize: 8, color: '#45464d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
           </div>
         ))}
       </div>
@@ -441,7 +496,7 @@ function PrintReport({ people, team, reportDate, locationStats, stats, user }: P
       <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '14px', fontSize: 10 }}>
         <thead>
           <tr style={{ background: '#f1f5f9' }}>
-            {['#', 'Name', 'Phone', 'Location', 'Group', 'Visited', 'Collected', 'Status'].map((h) => (
+            {['#', 'Name', 'Phone', 'Location', 'Group', 'Visited', 'Collected', 'Amount (₹)', 'Status'].map((h) => (
               <th key={h} style={{ border: '1px solid #cbd5e1', padding: '6px 8px', textAlign: 'left', fontWeight: 700, textTransform: 'uppercase', fontSize: 9, letterSpacing: '0.05em' }}>{h}</th>
             ))}
           </tr>
@@ -467,6 +522,9 @@ function PrintReport({ people, team, reportDate, locationStats, stats, user }: P
                 </td>
                 <td style={{ border: '1px solid #e2e8f0', padding: '5px 8px', textAlign: 'center', fontFamily: 'monospace', fontWeight: 700, fontSize: 9, color: isCollected ? '#006c4e' : '#0b1c30' }}>
                   {isDonor ? (isCollected ? '[X] Yes' : '[   ] No') : '—'}
+                </td>
+                <td style={{ border: '1px solid #e2e8f0', padding: '5px 8px', fontWeight: 700, color: '#006c4e', fontSize: 9 }}>
+                  {isDonor && isCollected ? (typeof p.amount === 'number' && p.amount > 0 ? formatINR(p.amount) : 'Not recorded') : '—'}
                 </td>
                 <td style={{ border: '1px solid #e2e8f0', padding: '5px 8px' }}>
                   {isDonor ? <PrintStatus status={p.status} /> : <span style={{ fontSize: 9 }}>Inviter Only</span>}

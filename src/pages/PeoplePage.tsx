@@ -6,7 +6,10 @@ import {
   normalizeLocationForDisplay,
   isPersonDonor,
   isPersonInviter,
+  formatINR,
+  parseAndValidateAmount,
 } from '../types';
+import RecordDonationModal from '../components/RecordDonationModal';
 
 // ── Badges ──────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: PersonStatus }) {
@@ -268,6 +271,7 @@ export interface PersonFormProps {
     location?: string;
     group?: string;
     status: PersonStatus;
+    amount?: number;
     isDonor?: boolean;
     isInviter?: boolean;
     inviterStatus?: InviterStatus;
@@ -297,6 +301,12 @@ export function PersonForm({
   const [group, setGroup] = useState(initial?.group ?? '');
   const [customGroup, setCustomGroup] = useState('');
   const [status, setStatus] = useState<PersonStatus>(initial?.status ?? 'pending');
+  const [amount, setAmount] = useState<string>(() => {
+    if (typeof initial?.amount === 'number' && initial.amount > 0) {
+      return String(initial.amount);
+    }
+    return '';
+  });
 
   // Role selections:
   // - Opening Add Person starts with both Donor and Inviter unselected.
@@ -313,7 +323,7 @@ export function PersonForm({
   const [inviterStatus, setInviterStatus] = useState<InviterStatus>(initial?.inviterStatus ?? 'not_invited');
 
   const [saving, setSaving] = useState(false);
-  const [errors, setErrors] = useState<{ fullName?: string; role?: string }>({});
+  const [errors, setErrors] = useState<{ fullName?: string; role?: string; amount?: string }>({});
   const [duplicates, setDuplicates] = useState<DuplicateSuggestion[]>([]);
   const [confirmedDifferent, setConfirmedDifferent] = useState(false);
 
@@ -366,7 +376,7 @@ export function PersonForm({
     if (saving) return;
 
     const trimmedName = fullName.trim();
-    const errs: { fullName?: string; role?: string } = {};
+    const errs: { fullName?: string; role?: string; amount?: string } = {};
 
     if (!trimmedName) {
       errs.fullName = 'Full name is required';
@@ -374,6 +384,22 @@ export function PersonForm({
 
     if (!isDonor && !isInviter) {
       errs.role = 'Select Donor or Inviter before saving.';
+    }
+
+    let numericAmount: number | undefined = undefined;
+    if (isDonor && status === 'collected') {
+      if (!amount.trim()) {
+        if (!initial?.amount) {
+          errs.amount = 'Please enter the collected donation amount in INR (₹).';
+        }
+      } else {
+        const parsed = parseAndValidateAmount(amount);
+        if (!parsed.valid || typeof parsed.value !== 'number') {
+          errs.amount = parsed.error || 'Enter a valid positive amount in INR (₹)';
+        } else {
+          numericAmount = parsed.value;
+        }
+      }
     }
 
     if (Object.keys(errs).length) {
@@ -403,6 +429,7 @@ export function PersonForm({
         location: finalLocation || undefined,
         group: finalGroup || undefined,
         status: isDonor ? status : 'pending',
+        amount: isDonor && status === 'collected' ? (numericAmount ?? initial?.amount) : undefined,
         isDonor,
         isInviter: isDonor ? false : isInviter,
         inviterStatus: isInviter || isDonor ? inviterStatus : 'not_invited',
@@ -601,6 +628,63 @@ export function PersonForm({
                   );
                 })}
               </div>
+
+              {status === 'collected' && (
+                <div style={{ marginTop: '0.625rem' }}>
+                  <label className="form-label" htmlFor="donationAmount">
+                    Amount Donated (₹) *
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <span
+                      style={{
+                        position: 'absolute',
+                        left: 12,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        fontWeight: 700,
+                        color: 'var(--on-surface-variant)',
+                        fontSize: 15,
+                      }}
+                    >
+                      ₹
+                    </span>
+                    <input
+                      id="donationAmount"
+                      className="form-input"
+                      style={{ paddingLeft: '2.25rem', fontWeight: 600, fontSize: 15 }}
+                      type="number"
+                      step="any"
+                      min="1"
+                      placeholder="e.g. 500"
+                      value={amount}
+                      onChange={(e) => {
+                        setAmount(e.target.value);
+                        if (errors.amount) setErrors((prev) => ({ ...prev, amount: undefined }));
+                      }}
+                    />
+                  </div>
+                  {/* Presets */}
+                  <div style={{ display: 'flex', gap: 6, marginTop: '0.375rem', flexWrap: 'wrap' }}>
+                    {[250, 500, 1000, 2000, 5000].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setAmount(String(preset));
+                          if (errors.amount) setErrors((prev) => ({ ...prev, amount: undefined }));
+                        }}
+                        className="btn btn-secondary"
+                        style={{ height: '1.75rem', padding: '0 0.5rem', fontSize: 11 }}
+                      >
+                        ₹{preset.toLocaleString('en-IN')}
+                      </button>
+                    ))}
+                  </div>
+                  {errors.amount && (
+                    <p className="form-error" style={{ marginTop: '0.375rem' }}>{errors.amount}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -663,9 +747,10 @@ interface StatusDrawerProps {
   onApplyInviterStatus: (status: InviterStatus) => Promise<void>;
   onClose: () => void;
   onDelete: () => void;
+  onRecordDonation?: (person: Person, mode: 'record' | 'edit' | 'convert') => void;
 }
 
-function StatusDrawer({ person, onApplyStatus, onApplyInviterStatus, onClose, onDelete }: StatusDrawerProps) {
+function StatusDrawer({ person, onApplyStatus, onApplyInviterStatus, onClose, onDelete, onRecordDonation }: StatusDrawerProps) {
   const [applying, setApplying] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -674,6 +759,11 @@ function StatusDrawer({ person, onApplyStatus, onApplyInviterStatus, onClose, on
   const isInviter = isPersonInviter(person);
 
   const handleDonationStatus = async (s: PersonStatus) => {
+    if (s === 'collected') {
+      onClose();
+      onRecordDonation?.(person, 'record');
+      return;
+    }
     setApplying(`donor_${s}`);
     await onApplyStatus(s);
     setApplying(null);
@@ -763,6 +853,73 @@ function StatusDrawer({ person, onApplyStatus, onApplyInviterStatus, onClose, on
                 );
               })}
             </div>
+
+            {person.status === 'collected' && (
+              <div style={{
+                marginTop: '0.625rem',
+                padding: '0.625rem 0.75rem',
+                background: 'var(--surface-container-high)',
+                borderRadius: '0.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.5rem',
+              }}>
+                <div>
+                  <span className="text-label-sm" style={{ color: 'var(--on-surface-variant)' }}>Total Donation Recorded</span>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--on-surface)' }}>
+                    {typeof person.amount === 'number' && person.amount > 0 ? (
+                      formatINR(person.amount)
+                    ) : (
+                      <span style={{ color: 'var(--warning-text)', fontSize: 13, fontWeight: 600 }}>Amount not recorded</span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ height: '2rem', padding: '0 0.75rem', fontSize: 12, borderRadius: '0.375rem', gap: 4 }}
+                  onClick={() => {
+                    onClose();
+                    onRecordDonation?.(person, typeof person.amount === 'number' && person.amount > 0 ? 'record' : 'edit');
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 15 }}>payments</span>
+                  <span>{typeof person.amount === 'number' && person.amount > 0 ? 'Edit / Add' : 'Record Amount'}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* If not a donor, offer Mark as Donor & Record Donation */}
+        {!isDonor && (
+          <div style={{
+            marginBottom: '1.25rem',
+            padding: '0.75rem',
+            borderRadius: '0.625rem',
+            background: 'var(--secondary-container, #e8f5e9)',
+            border: '1px solid var(--secondary, #2e7d32)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.25rem' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--secondary)' }}>volunteer_activism</span>
+              <span className="text-label-md" style={{ color: 'var(--on-secondary-container, #1b5e20)', fontWeight: 700 }}>Record a Donation</span>
+            </div>
+            <p className="text-body-sm" style={{ color: 'var(--on-secondary-container, #1b5e20)', marginBottom: '0.625rem', fontSize: 12 }}>
+              Convert this contact to a donor and record their contribution. Their invitation status and group will be preserved.
+            </p>
+            <button
+              type="button"
+              className="btn btn-success"
+              style={{ width: '100%', height: '2.5rem', fontSize: 13 }}
+              onClick={() => {
+                onClose();
+                onRecordDonation?.(person, 'convert');
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>volunteer_activism</span>
+              <span>Mark as Donor & Enter Amount</span>
+            </button>
           </div>
         )}
 
@@ -845,6 +1002,7 @@ interface ContactCardProps {
   onMarkCollected: () => void;
   onMarkInvited: () => void;
   onMarkConfirmed: () => void;
+  onOpenDonationModal: (person: Person, mode: 'record' | 'edit' | 'convert') => void;
   viewMode: 'all' | 'donors' | 'invitations';
 }
 
@@ -856,6 +1014,7 @@ function ContactCard({
   onMarkCollected,
   onMarkInvited,
   onMarkConfirmed,
+  onOpenDonationModal,
   viewMode,
 }: ContactCardProps) {
   const isDonor = isPersonDonor(person);
@@ -932,6 +1091,34 @@ function ContactCard({
               <StatusBadge status={person.status} />
             </button>
           )}
+          {isDonor && isCollected && (
+            <button
+              onClick={() => onOpenDonationModal(person, typeof person.amount === 'number' && person.amount > 0 ? 'record' : 'edit')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              title="Click to view or edit donation amount"
+            >
+              {typeof person.amount === 'number' && person.amount > 0 ? (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                  padding: '0.125rem 0.5rem', borderRadius: '0.25rem', fontSize: 11, fontWeight: 700,
+                  background: 'var(--secondary-container, #e8f5e9)', color: 'var(--on-secondary-container, #1b5e20)',
+                }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 12 }}>payments</span>
+                  {formatINR(person.amount)}
+                </span>
+              ) : (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                  padding: '0.125rem 0.375rem', borderRadius: '0.25rem', fontSize: 10, fontWeight: 600,
+                  background: 'var(--warning-bg, #fef3c7)', color: 'var(--warning-text, #92400e)',
+                  border: '1px solid var(--warning-border, #fcd34d)',
+                }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 12 }}>help_outline</span>
+                  Amount not recorded
+                </span>
+              )}
+            </button>
+          )}
           {isInviter && (
             <button onClick={onOpenStatus} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
               <InviterBadge inviterStatus={person.inviterStatus} />
@@ -957,7 +1144,7 @@ function ContactCard({
       </div>
 
       {/* Quick Action Buttons */}
-      <div style={{ marginTop: '0.875rem', paddingTop: '0.75rem', borderTop: '1px solid var(--surface-container)', display: 'flex', gap: '0.5rem' }}>
+      <div style={{ marginTop: '0.875rem', paddingTop: '0.75rem', borderTop: '1px solid var(--surface-container)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         {/* If viewing in Donors or All mode */}
         {viewMode !== 'invitations' && isDonor && (
           <>
@@ -974,9 +1161,13 @@ function ContactCard({
               </button>
             )}
             {person.status === 'collected' && (
-              <button className="btn btn-secondary" onClick={onOpenStatus} style={{ flex: 1, height: '2.5rem', fontSize: 13, borderRadius: '0.5rem' }}>
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>check_circle</span>
-                Donation Received
+              <button
+                className="btn btn-secondary"
+                onClick={() => onOpenDonationModal(person, typeof person.amount === 'number' && person.amount > 0 ? 'record' : 'edit')}
+                style={{ flex: 2, height: '2.5rem', fontSize: 13, borderRadius: '0.5rem', gap: 4 }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 15, color: 'var(--secondary)' }}>payments</span>
+                <span>{typeof person.amount === 'number' && person.amount > 0 ? `${formatINR(person.amount)} • Add / Edit` : 'Record Amount'}</span>
               </button>
             )}
           </>
@@ -1003,7 +1194,30 @@ function ContactCard({
                 Confirmed Guest
               </button>
             )}
+            {!isDonor && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => onOpenDonationModal(person, 'convert')}
+                style={{ height: '2.5rem', fontSize: 12, borderRadius: '0.5rem', borderColor: 'var(--secondary)', color: 'var(--secondary)', padding: '0 0.75rem', gap: 4 }}
+                title="Mark this person as a donor and enter donation amount"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 15 }}>volunteer_activism</span>
+                <span>Mark Donor</span>
+              </button>
+            )}
           </>
+        )}
+
+        {/* In All mode if not a donor, allow recording donation directly */}
+        {viewMode === 'all' && !isDonor && (
+          <button
+            className="btn btn-secondary"
+            onClick={() => onOpenDonationModal(person, 'convert')}
+            style={{ flex: 1, height: '2.5rem', fontSize: 12, borderRadius: '0.5rem', borderColor: 'var(--secondary)', color: 'var(--secondary)', gap: 4 }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 15 }}>volunteer_activism</span>
+            <span>Mark as Donor</span>
+          </button>
         )}
 
         {/* Edit Button */}
@@ -1044,6 +1258,7 @@ export default function PeoplePage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editPerson, setEditPerson] = useState<Person | null>(null);
   const [statusPerson, setStatusPerson] = useState<Person | null>(null);
+  const [donationModal, setDonationModal] = useState<{ person: Person; mode: 'record' | 'edit' | 'convert' } | null>(null);
   const [showLocationDrawer, setShowLocationDrawer] = useState(false);
   const [showGroupDrawer, setShowGroupDrawer] = useState(false);
 
@@ -1130,7 +1345,7 @@ export default function PeoplePage() {
   // Handlers
   const handleAddPerson = useCallback(async (data: {
     fullName: string; phone?: string; location?: string; group?: string;
-    status: PersonStatus; isDonor?: boolean; isInviter?: boolean; inviterStatus?: InviterStatus;
+    status: PersonStatus; amount?: number; isDonor?: boolean; isInviter?: boolean; inviterStatus?: InviterStatus;
   }) => {
     try {
       await addPerson(data);
@@ -1144,7 +1359,7 @@ export default function PeoplePage() {
 
   const handleUpdatePerson = useCallback(async (data: {
     fullName: string; phone?: string; location?: string; group?: string;
-    status: PersonStatus; isDonor?: boolean; isInviter?: boolean; inviterStatus?: InviterStatus;
+    status: PersonStatus; amount?: number; isDonor?: boolean; isInviter?: boolean; inviterStatus?: InviterStatus;
   }) => {
     if (!editPerson) return;
     try {
@@ -1404,9 +1619,8 @@ export default function PeoplePage() {
                 await updatePersonStatus(person.id, 'visited');
                 showToast(`${person.fullName} marked as Visited`, 'success');
               }}
-              onMarkCollected={async () => {
-                await updatePersonStatus(person.id, 'collected');
-                showToast(`Donation collected from ${person.fullName}!`, 'success');
+              onMarkCollected={() => {
+                setDonationModal({ person, mode: 'record' });
               }}
               onMarkInvited={async () => {
                 await updatePersonInviterStatus(person.id, 'invited');
@@ -1415,6 +1629,9 @@ export default function PeoplePage() {
               onMarkConfirmed={async () => {
                 await updatePersonInviterStatus(person.id, 'confirmed');
                 showToast(`${person.fullName} confirmed attendance!`, 'success');
+              }}
+              onOpenDonationModal={(p, mode) => {
+                setDonationModal({ person: p, mode });
               }}
             />
           ))}
@@ -1455,6 +1672,18 @@ export default function PeoplePage() {
           onApplyInviterStatus={handleInviterStatusUpdate}
           onClose={() => setStatusPerson(null)}
           onDelete={handleDelete}
+          onRecordDonation={(p, mode) => {
+            setDonationModal({ person: p, mode });
+          }}
+        />
+      )}
+
+      {/* Record / Edit / Convert Donation Modal */}
+      {donationModal && (
+        <RecordDonationModal
+          person={donationModal.person}
+          mode={donationModal.mode}
+          onClose={() => setDonationModal(null)}
         />
       )}
 

@@ -3,8 +3,9 @@ import type { AppPage } from '../App';
 import { useTeam } from '../contexts/TeamContext';
 import { useToast } from '../contexts/ToastContext';
 import type { Group, Person, PersonStatus, InviterStatus } from '../types';
-import { isPersonDonor, isPersonInviter, normalizeLocationForDisplay } from '../types';
+import { isPersonDonor, isPersonInviter, normalizeLocationForDisplay, formatINR } from '../types';
 import { PersonForm } from './PeoplePage';
+import RecordDonationModal from '../components/RecordDonationModal';
 
 interface GroupsPageProps {
   onNavigate?: (page: AppPage) => void;
@@ -29,6 +30,12 @@ export default function GroupsPage(_props: GroupsPageProps) {
 
   // Navigation & Detail state
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+
+  // Donation modal state
+  const [donationModalPerson, setDonationModalPerson] = useState<{
+    person: Person;
+    mode: 'record' | 'edit' | 'convert';
+  } | null>(null);
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -99,6 +106,8 @@ export default function GroupsPage(_props: GroupsPageProps) {
       collected: number;
       visited: number;
       pending: number;
+      collectedAmount: number;
+      collectedWithoutAmount: number;
     }>();
 
     groups.forEach((g) => {
@@ -109,6 +118,8 @@ export default function GroupsPage(_props: GroupsPageProps) {
         collected: 0,
         visited: 0,
         pending: 0,
+        collectedAmount: 0,
+        collectedWithoutAmount: 0,
       });
     });
 
@@ -119,9 +130,18 @@ export default function GroupsPage(_props: GroupsPageProps) {
       s.total++;
       if (isPersonDonor(p)) {
         s.donors++;
-        if (p.status === 'collected') s.collected++;
-        else if (p.status === 'visited') s.visited++;
-        else s.pending++;
+        if (p.status === 'collected') {
+          s.collected++;
+          if (typeof p.amount === 'number' && Number.isFinite(p.amount) && p.amount > 0) {
+            s.collectedAmount += p.amount;
+          } else {
+            s.collectedWithoutAmount++;
+          }
+        } else if (p.status === 'visited') {
+          s.visited++;
+        } else {
+          s.pending++;
+        }
       }
       if (isPersonInviter(p)) {
         s.invitations++;
@@ -324,6 +344,8 @@ export default function GroupsPage(_props: GroupsPageProps) {
       collected: groupPeople.filter((p) => isPersonDonor(p) && p.status === 'collected').length,
       visited: groupPeople.filter((p) => isPersonDonor(p) && p.status === 'visited').length,
       pending: groupPeople.filter((p) => isPersonDonor(p) && p.status === 'pending').length,
+      collectedAmount: 0,
+      collectedWithoutAmount: 0,
     };
     const collectionPct = stats.donors > 0 ? Math.round((stats.collected / stats.donors) * 100) : 0;
 
@@ -435,6 +457,25 @@ export default function GroupsPage(_props: GroupsPageProps) {
             <div style={{ background: 'var(--surface-container-lowest)', borderRadius: '0.5rem', padding: '0.375rem 0.25rem' }}>
               <span className="text-label-sm" style={{ color: 'var(--on-surface-variant)', display: 'block', fontSize: 11 }}>Invitations</span>
               <span className="text-label-md" style={{ fontWeight: 700, color: 'var(--primary)' }}>{stats.invitations}</span>
+            </div>
+          </div>
+
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            marginTop: '0.75rem', paddingTop: '0.625rem', borderTop: '1px solid var(--surface-container-highest)',
+          }}>
+            <span className="text-body-sm" style={{ color: 'var(--on-surface-variant)', fontWeight: 600 }}>
+              Total Group Collections:
+            </span>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--secondary)' }}>
+                {formatINR(stats.collectedAmount)}
+              </span>
+              {stats.collectedWithoutAmount > 0 && (
+                <span style={{ display: 'block', fontSize: 11, color: 'var(--warning-text)' }}>
+                  ({stats.collectedWithoutAmount} without recorded amount)
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -601,15 +642,17 @@ export default function GroupsPage(_props: GroupsPageProps) {
                   </div>
 
                   {/* Status chips and quick toggles */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '0.375rem', borderTop: '1px solid var(--surface-container)' }}>
-                    <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '0.375rem', borderTop: '1px solid var(--surface-container)', flexWrap: 'wrap', gap: '0.375rem' }}>
+                    <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', flexWrap: 'wrap' }}>
                       {isDonor && (
                         <span style={{
                           fontSize: 11, padding: '2px 8px', borderRadius: 9999, fontWeight: 600,
                           background: person.status === 'collected' ? 'var(--secondary-container)' : person.status === 'visited' ? 'var(--primary-container)' : 'var(--surface-container-high)',
                           color: person.status === 'collected' ? 'var(--on-secondary-container)' : person.status === 'visited' ? 'var(--on-primary-container)' : 'var(--on-surface)',
                         }}>
-                          Donation: {person.status}
+                          {person.status === 'collected'
+                            ? (typeof person.amount === 'number' && person.amount > 0 ? `Collected: ${formatINR(person.amount)}` : 'Collected (Amount not recorded)')
+                            : `Donation: ${person.status}`}
                         </span>
                       )}
                       {isInviter && (
@@ -623,24 +666,64 @@ export default function GroupsPage(_props: GroupsPageProps) {
                       )}
                     </div>
 
-                    {/* Quick status button */}
-                    {isDonor && person.status !== 'collected' && (
-                      <button
-                        onClick={async () => {
-                          const next = person.status === 'pending' ? 'visited' : 'collected';
-                          await updatePersonStatus(person.id, next);
-                          showToast(`${person.fullName} marked as ${next}`, 'success');
-                        }}
-                        style={{
-                          background: 'none', border: 'none', cursor: 'pointer',
-                          fontSize: 11, fontWeight: 700, color: 'var(--secondary)',
-                          display: 'flex', alignItems: 'center', gap: 2,
-                        }}
-                      >
-                        <span>Mark {person.status === 'pending' ? 'Visited' : 'Collected'}</span>
-                        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_forward</span>
-                      </button>
-                    )}
+                    {/* Quick status actions */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {isDonor && person.status === 'pending' && (
+                        <button
+                          onClick={async () => {
+                            await updatePersonStatus(person.id, 'visited');
+                            showToast(`${person.fullName} marked as Visited`, 'success');
+                          }}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            fontSize: 11, fontWeight: 700, color: 'var(--secondary)',
+                            display: 'flex', alignItems: 'center', gap: 2,
+                          }}
+                        >
+                          <span>Mark Visited</span>
+                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_forward</span>
+                        </button>
+                      )}
+                      {isDonor && (person.status === 'pending' || person.status === 'visited') && (
+                        <button
+                          onClick={() => setDonationModalPerson({ person, mode: 'record' })}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            fontSize: 11, fontWeight: 700, color: 'var(--secondary)',
+                            display: 'flex', alignItems: 'center', gap: 2,
+                          }}
+                        >
+                          <span>Mark Collected</span>
+                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>volunteer_activism</span>
+                        </button>
+                      )}
+                      {isDonor && person.status === 'collected' && (
+                        <button
+                          onClick={() => setDonationModalPerson({ person, mode: typeof person.amount === 'number' && person.amount > 0 ? 'record' : 'edit' })}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            fontSize: 11, fontWeight: 700, color: 'var(--secondary)',
+                            display: 'flex', alignItems: 'center', gap: 2,
+                          }}
+                        >
+                          <span>{typeof person.amount === 'number' && person.amount > 0 ? 'Add / Edit' : 'Enter Amount'}</span>
+                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>payments</span>
+                        </button>
+                      )}
+                      {!isDonor && (
+                        <button
+                          onClick={() => setDonationModalPerson({ person, mode: 'convert' })}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            fontSize: 11, fontWeight: 700, color: 'var(--secondary)',
+                            display: 'flex', alignItems: 'center', gap: 2,
+                          }}
+                        >
+                          <span>Mark Donor</span>
+                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>volunteer_activism</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -814,6 +897,15 @@ export default function GroupsPage(_props: GroupsPageProps) {
             </div>
           </>
         )}
+
+        {/* Record Donation Modal (in group detail view) */}
+        {donationModalPerson && (
+          <RecordDonationModal
+            person={donationModalPerson.person}
+            mode={donationModalPerson.mode}
+            onClose={() => setDonationModalPerson(null)}
+          />
+        )}
       </div>
     );
   }
@@ -934,6 +1026,7 @@ export default function GroupsPage(_props: GroupsPageProps) {
           {groups.map((group) => {
             const stats = groupStatsMap.get(group.name.trim().toLowerCase()) || {
               total: 0, donors: 0, invitations: 0, collected: 0, visited: 0, pending: 0,
+              collectedAmount: 0, collectedWithoutAmount: 0,
             };
             const collectionPct = stats.donors > 0 ? Math.round((stats.collected / stats.donors) * 100) : 0;
 
@@ -981,7 +1074,7 @@ export default function GroupsPage(_props: GroupsPageProps) {
                         )}
                       </div>
                       <span style={{ fontSize: 12, color: 'var(--on-surface-variant)' }}>
-                        {stats.total} contact{stats.total !== 1 ? 's' : ''} · {stats.donors} donor{stats.donors !== 1 ? 's' : ''}
+                        {stats.total} contact{stats.total !== 1 ? 's' : ''} · {stats.donors} donor{stats.donors !== 1 ? 's' : ''} · <strong style={{ color: 'var(--secondary)' }}>{formatINR(stats.collectedAmount)}</strong> collected
                       </span>
                     </div>
                   </div>
@@ -1010,7 +1103,7 @@ export default function GroupsPage(_props: GroupsPageProps) {
                 {stats.donors > 0 && (
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--on-surface-variant)', marginBottom: 4 }}>
-                      <span>Collection Progress</span>
+                      <span>Progress · {formatINR(stats.collectedAmount)}</span>
                       <span style={{ fontWeight: 700, color: 'var(--secondary)' }}>{stats.collected}/{stats.donors} ({collectionPct}%)</span>
                     </div>
                     <div className="progress-bar" style={{ height: '0.35rem' }}>
@@ -1165,6 +1258,15 @@ export default function GroupsPage(_props: GroupsPageProps) {
             </div>
           </div>
         </>
+      )}
+
+      {/* Record Donation Modal (in landing view) */}
+      {donationModalPerson && (
+        <RecordDonationModal
+          person={donationModalPerson.person}
+          mode={donationModalPerson.mode}
+          onClose={() => setDonationModalPerson(null)}
+        />
       )}
     </div>
   );

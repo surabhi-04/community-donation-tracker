@@ -14,8 +14,9 @@ import {
   getDoc,
   getDocs,
   where,
+  Timestamp,
 } from 'firebase/firestore';
-import type { Team, TeamMember, Person, PersonStatus, InviterStatus, MemberRole, UserTeamInfo, Group } from '../types';
+import type { Team, TeamMember, Person, PersonStatus, InviterStatus, MemberRole, UserTeamInfo, Group, Contribution } from '../types';
 import { normalizeLocationForStorage } from '../types';
 import { db, firebaseConfigured } from '../firebase';
 import { useAuth } from './AuthContext';
@@ -70,10 +71,13 @@ interface TeamContextType {
   restoreTeamWithId: (teamId: string) => Promise<boolean>;
   leaveTeam: () => Promise<void>;
   addPerson: (data: Omit<Person, 'id' | 'createdByUid' | 'createdByName' | 'createdAt' | 'updatedAt'>) => Promise<void>;
-  updatePerson: (id: string, data: Partial<Pick<Person, 'fullName' | 'phone' | 'location' | 'group' | 'status' | 'isDonor' | 'isInviter' | 'inviterStatus'>>) => Promise<void>;
+  updatePerson: (id: string, data: Partial<Pick<Person, 'fullName' | 'phone' | 'location' | 'group' | 'status' | 'isDonor' | 'isInviter' | 'inviterStatus' | 'amount' | 'contributions'>>) => Promise<void>;
   deletePerson: (id: string) => Promise<void>;
   updatePersonStatus: (id: string, status: PersonStatus) => Promise<void>;
   updatePersonInviterStatus: (id: string, inviterStatus: InviterStatus) => Promise<void>;
+  recordDonation: (personId: string, amount: number, note?: string) => Promise<void>;
+  editDonationAmount: (personId: string, newAmount: number, note?: string) => Promise<void>;
+  convertInviterToDonor: (personId: string, initialAmount?: number, note?: string) => Promise<void>;
   createGroup: (name: string, description?: string) => Promise<string>;
   renameGroup: (groupId: string, newName: string) => Promise<void>;
   deleteGroup: (groupId: string) => Promise<void>;
@@ -788,7 +792,7 @@ export function TeamProvider({ children }: { children: ReactNode }) {
     const ref = doc(collection(db, 'teams', teamId, 'people'));
 
     const isDonor = data.isDonor !== false;
-    const isInviter = !isDonor && data.isInviter === true;
+    const isInviter = data.isInviter === true;
 
     const docData: Record<string, unknown> = {
       fullName: data.fullName.trim(),
@@ -805,13 +809,25 @@ export function TeamProvider({ children }: { children: ReactNode }) {
 
     if (data.phone?.trim()) docData.phone = data.phone.trim();
     if (data.group?.trim()) docData.group = data.group.trim();
+    if (typeof data.amount === 'number' && data.amount > 0) {
+      docData.amount = data.amount;
+      const initialContrib: Contribution = {
+        id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        amount: data.amount,
+        recordedAt: Timestamp.now(),
+        recordedByUid: user.uid,
+        recordedByName: user.displayName || 'Unknown',
+        note: 'Initial contribution',
+      };
+      docData.contributions = data.contributions && data.contributions.length > 0 ? data.contributions : [initialContrib];
+    }
 
     await setDoc(ref, docData);
   }, [user, teamId]);
 
   const updatePerson = useCallback(async (
     id: string,
-    data: Partial<Pick<Person, 'fullName' | 'phone' | 'location' | 'group' | 'status' | 'isDonor' | 'isInviter' | 'inviterStatus'>>
+    data: Partial<Pick<Person, 'fullName' | 'phone' | 'location' | 'group' | 'status' | 'isDonor' | 'isInviter' | 'inviterStatus' | 'amount' | 'contributions'>>
   ) => {
     if (!db || !teamId) throw new Error('Not in a team');
     const updateData: Record<string, unknown> = {
@@ -831,10 +847,20 @@ export function TeamProvider({ children }: { children: ReactNode }) {
     if ('group' in data) {
       updateData.group = data.group?.trim() || '';
     }
+    if ('amount' in data) {
+      if (typeof data.amount === 'number' && data.amount > 0) {
+        updateData.amount = data.amount;
+      }
+    }
+    if ('contributions' in data && Array.isArray(data.contributions)) {
+      updateData.contributions = data.contributions;
+    }
     if ('isDonor' in data) {
       if (data.isDonor === true) {
         updateData.isDonor = true;
-        updateData.isInviter = false;
+        if (data.isInviter !== undefined) {
+          updateData.isInviter = data.isInviter;
+        }
       } else if (data.isDonor === false) {
         updateData.isDonor = false;
         updateData.isInviter = true;
@@ -864,6 +890,113 @@ export function TeamProvider({ children }: { children: ReactNode }) {
       updatedAt: serverTimestamp(),
     });
   }, [teamId]);
+
+  // ── Record Donation (with contribution tracking and repeat donation support) ──
+  const recordDonation = useCallback(async (personId: string, amount: number, note?: string) => {
+    if (!user || !db || !teamId) throw new Error('Not authenticated or no active team');
+    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+      throw new Error('Donation amount must be greater than ₹0');
+    }
+
+    const targetPerson = people.find((p) => p.id === personId);
+    if (!targetPerson) throw new Error('Person record not found');
+
+    const rounded = Math.round(amount * 100) / 100;
+    const newContrib: Contribution = {
+      id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+      amount: rounded,
+      recordedAt: Timestamp.now(),
+      recordedByUid: user.uid,
+      recordedByName: user.displayName || 'Volunteer',
+      note: note?.trim() || undefined,
+    };
+
+    let prevContribs: Contribution[] = Array.isArray(targetPerson.contributions) ? [...targetPerson.contributions] : [];
+    if (prevContribs.length === 0 && typeof targetPerson.amount === 'number' && targetPerson.amount > 0) {
+      prevContribs = [{
+        id: `c_legacy_${personId}`,
+        amount: targetPerson.amount,
+        recordedAt: targetPerson.createdAt || Timestamp.now(),
+        recordedByUid: targetPerson.createdByUid || user.uid,
+        recordedByName: targetPerson.createdByName || 'Recorded earlier',
+        note: 'Previous contribution',
+      }];
+    }
+
+    const updatedContribs = [...prevContribs, newContrib];
+    const totalAmount = Math.round(updatedContribs.reduce((sum, c) => sum + (c.amount || 0), 0) * 100) / 100;
+
+    await updateDoc(doc(db, 'teams', teamId, 'people', personId), {
+      status: 'collected',
+      isDonor: true,
+      amount: totalAmount,
+      contributions: updatedContribs,
+      updatedAt: serverTimestamp(),
+    });
+  }, [user, teamId, people]);
+
+  // ── Edit Donation Amount ──────────────────────────────────────────
+  const editDonationAmount = useCallback(async (personId: string, newAmount: number, note?: string) => {
+    if (!user || !db || !teamId) throw new Error('Not authenticated or no active team');
+    if (typeof newAmount !== 'number' || isNaN(newAmount) || newAmount <= 0) {
+      throw new Error('Donation amount must be greater than ₹0');
+    }
+
+    const targetPerson = people.find((p) => p.id === personId);
+    if (!targetPerson) throw new Error('Person record not found');
+
+    const rounded = Math.round(newAmount * 100) / 100;
+    const updatedContribs: Contribution[] = [
+      {
+        id: `c_edit_${Date.now()}`,
+        amount: rounded,
+        recordedAt: Timestamp.now(),
+        recordedByUid: user.uid,
+        recordedByName: user.displayName || 'Volunteer',
+        note: note?.trim() || 'Amount updated',
+      },
+    ];
+
+    await updateDoc(doc(db, 'teams', teamId, 'people', personId), {
+      amount: rounded,
+      status: 'collected',
+      contributions: updatedContribs,
+      updatedAt: serverTimestamp(),
+    });
+  }, [user, teamId, people]);
+
+  // ── Convert Invitation-only Person to Donor ───────────────────────
+  const convertInviterToDonor = useCallback(async (personId: string, initialAmount?: number, note?: string) => {
+    if (!user || !db || !teamId) throw new Error('Not authenticated or no active team');
+    const targetPerson = people.find((p) => p.id === personId);
+    if (!targetPerson) throw new Error('Person record not found');
+
+    const updatePayload: Record<string, unknown> = {
+      isDonor: true,
+      isInviter: true, // Preserve inviter role!
+      updatedAt: serverTimestamp(),
+    };
+
+    if (typeof initialAmount === 'number' && initialAmount > 0) {
+      const rounded = Math.round(initialAmount * 100) / 100;
+      const newContrib: Contribution = {
+        id: `c_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        amount: rounded,
+        recordedAt: Timestamp.now(),
+        recordedByUid: user.uid,
+        recordedByName: user.displayName || 'Volunteer',
+        note: note?.trim() || 'First contribution',
+      };
+      updatePayload.status = 'collected';
+      updatePayload.amount = rounded;
+      updatePayload.contributions = [newContrib];
+    } else {
+      // Marked as donor without immediate collection -> starts as pending visit
+      updatePayload.status = 'pending';
+    }
+
+    await updateDoc(doc(db, 'teams', teamId, 'people', personId), updatePayload);
+  }, [user, teamId, people]);
 
   // ── Groups CRUD ─────────────────────────────────────────────────
   const createGroup = useCallback(async (name: string, description?: string): Promise<string> => {
@@ -1014,6 +1147,7 @@ export function TeamProvider({ children }: { children: ReactNode }) {
       userTeamIds, userTeams, activeTeamId: teamId, retryTeamRestore, switchTeam,
       createTeam, joinTeam, restoreTeamWithId, leaveTeam,
       addPerson, updatePerson, deletePerson, updatePersonStatus, updatePersonInviterStatus,
+      recordDonation, editDonationAmount, convertInviterToDonor,
       createGroup, renameGroup, deleteGroup, assignPersonToGroup, reconcileGroups,
     }}>
       {children}

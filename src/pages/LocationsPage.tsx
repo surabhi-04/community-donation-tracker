@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useTeam } from '../contexts/TeamContext';
 import type { AppPage } from '../App';
 import type { Person, LocationStats } from '../types';
-import { normalizeLocationForDisplay, isPersonDonor } from '../types';
+import { normalizeLocationForDisplay, isPersonDonor, formatINR } from '../types';
 
 interface LocationsPageProps {
   onNavigate: (page: AppPage) => void;
@@ -13,10 +13,15 @@ function computeLocationStats(people: Person[]): LocationStats[] {
   const map = new Map<string, LocationStats>();
   donors.forEach((p) => {
     const loc = normalizeLocationForDisplay(p.location) || 'No Location Assigned';
-    if (!map.has(loc)) map.set(loc, { location: loc, total: 0, pending: 0, visited: 0, collected: 0 });
+    if (!map.has(loc)) {
+      map.set(loc, { location: loc, total: 0, pending: 0, visited: 0, collected: 0, collectedAmount: 0 });
+    }
     const s = map.get(loc)!;
     s.total++;
     s[p.status]++;
+    if (p.status === 'collected' && typeof p.amount === 'number' && Number.isFinite(p.amount) && p.amount > 0) {
+      s.collectedAmount = (s.collectedAmount || 0) + p.amount;
+    }
   });
   return Array.from(map.values()).sort((a, b) => b.total - a.total);
 }
@@ -122,7 +127,9 @@ export default function LocationsPage({ onNavigate }: LocationsPageProps) {
                         <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--secondary)', flexShrink: 0 }} />
                         <h2 className="text-headline-sm" style={{ color: 'var(--on-surface)', fontWeight: 600 }}>{ls.location}</h2>
                       </div>
-                      <span className="text-label-sm" style={{ color: 'var(--on-surface-variant)' }}>{ls.total} donors</span>
+                      <span className="text-label-sm" style={{ color: 'var(--on-surface-variant)' }}>
+                        {ls.total} donor{ls.total !== 1 ? 's' : ''} · <strong style={{ color: 'var(--secondary)' }}>{formatINR(ls.collectedAmount)}</strong> collected
+                      </span>
                     </div>
                   </div>
                   <button

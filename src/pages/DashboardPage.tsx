@@ -2,19 +2,39 @@ import { useMemo } from 'react';
 import { useTeam } from '../contexts/TeamContext';
 import type { AppPage } from '../App';
 import type { Person, LocationStats, GroupStats } from '../types';
-import { normalizeLocationForDisplay, isPersonDonor, isPersonInviter } from '../types';
+import { normalizeLocationForDisplay, isPersonDonor, isPersonInviter, formatINR } from '../types';
 
 interface DashboardPageProps {
   onNavigate: (page: AppPage) => void;
 }
 
 function computeStats(people: Person[]) {
-  // Requirement 4: Inviter-only people must not appear in the donor list or counts
+  // Requirement: Inviter-only people must not appear in the donor list or counts
   const donors = people.filter(isPersonDonor);
   const total = donors.length;
   const pending = donors.filter((p) => p.status === 'pending').length;
   const visited = donors.filter((p) => p.status === 'visited').length;
   const collected = donors.filter((p) => p.status === 'collected').length;
+
+  // Donation Amount Metrics
+  let totalAmountCollected = 0;
+  let totalRecordedDonations = 0;
+  let collectedWithoutAmount = 0;
+  let totalContributionsCount = 0;
+
+  donors.forEach((p) => {
+    if (p.status === 'collected') {
+      if (typeof p.amount === 'number' && p.amount > 0) {
+        totalAmountCollected += p.amount;
+        totalRecordedDonations++;
+        totalContributionsCount += p.contributions && p.contributions.length > 0 ? p.contributions.length : 1;
+      } else {
+        collectedWithoutAmount++;
+      }
+    }
+  });
+
+  totalAmountCollected = Math.round(totalAmountCollected * 100) / 100;
 
   // Invitation metrics (all donors appear in invitation list)
   const inviters = people.filter(isPersonInviter);
@@ -27,11 +47,14 @@ function computeStats(people: Person[]) {
   donors.forEach((p) => {
     const loc = normalizeLocationForDisplay(p.location) || 'No Location Assigned';
     if (!locationMap.has(loc)) {
-      locationMap.set(loc, { location: loc, total: 0, pending: 0, visited: 0, collected: 0 });
+      locationMap.set(loc, { location: loc, total: 0, pending: 0, visited: 0, collected: 0, collectedAmount: 0 });
     }
     const ls = locationMap.get(loc)!;
     ls.total++;
     ls[p.status]++;
+    if (p.status === 'collected' && typeof p.amount === 'number' && p.amount > 0) {
+      ls.collectedAmount += p.amount;
+    }
   });
 
   // Group by Group / Block / Area
@@ -39,11 +62,14 @@ function computeStats(people: Person[]) {
   donors.forEach((p) => {
     const grp = p.group?.trim() || 'No Group Assigned';
     if (!groupMap.has(grp)) {
-      groupMap.set(grp, { group: grp, total: 0, pending: 0, visited: 0, collected: 0 });
+      groupMap.set(grp, { group: grp, total: 0, pending: 0, visited: 0, collected: 0, collectedAmount: 0 });
     }
     const gs = groupMap.get(grp)!;
     gs.total++;
     gs[p.status]++;
+    if (p.status === 'collected' && typeof p.amount === 'number' && p.amount > 0) {
+      gs.collectedAmount += p.amount;
+    }
   });
 
   return {
@@ -51,6 +77,10 @@ function computeStats(people: Person[]) {
     pending,
     visited,
     collected,
+    totalAmountCollected,
+    totalRecordedDonations,
+    collectedWithoutAmount,
+    totalContributionsCount,
     totalInvitations,
     confirmedInvitations,
     pendingInvitations,
@@ -120,13 +150,79 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
         </button>
       </div>
 
-      {/* Summary Metric Cards */}
+      {/* Summary Metric Cards & Financial Overview */}
       {peopleLoading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
           <div className="spinner" />
         </div>
       ) : (
         <>
+          {/* Total Amount Collected Summary Card */}
+          <div style={{
+            background: 'linear-gradient(135deg, #00513B 0%, #006C4E 100%)',
+            color: '#ffffff',
+            borderRadius: '0.875rem',
+            padding: '1.125rem 1.25rem',
+            boxShadow: '0 4px 12px rgba(0, 108, 78, 0.22)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.625rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.2)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 20, color: '#ffffff' }}>payments</span>
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(255, 255, 255, 0.9)' }}>
+                  Total Amount Collected
+                </span>
+              </div>
+              <span style={{
+                fontSize: 11, fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: 9999,
+                background: 'rgba(255, 255, 255, 0.2)', color: '#ffffff', letterSpacing: '0.04em',
+              }}>
+                TEAM TOTAL
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: '0.25rem' }}>
+              <div style={{ fontSize: '2.25rem', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' }}>
+                {formatINR(stats.totalAmountCollected, { showZero: true })}
+              </div>
+            </div>
+
+            <div style={{
+              display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem',
+              paddingTop: '0.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.2)',
+              fontSize: 12, color: 'rgba(255, 255, 255, 0.9)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>receipt_long</span>
+                <span><strong>{stats.totalRecordedDonations}</strong> donors with recorded amount</span>
+              </div>
+              {stats.totalContributionsCount > stats.totalRecordedDonations && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span>•</span>
+                  <span><strong>{stats.totalContributionsCount}</strong> total contributions</span>
+                </div>
+              )}
+              {stats.collectedWithoutAmount > 0 && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  background: 'rgba(255, 235, 59, 0.25)', padding: '0.125rem 0.5rem',
+                  borderRadius: 4, color: '#fff9c4', fontWeight: 600,
+                }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 15 }}>warning</span>
+                  <span>{stats.collectedWithoutAmount} collected without amount</span>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
             {/* Total Donors */}
             <div className="metric-card">
@@ -288,7 +384,11 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
                         <span className="material-symbols-outlined" style={{ fontSize: 16, color: 'var(--primary)' }}>workspaces</span>
                         <span className="text-label-md" style={{ color: 'var(--on-surface)', fontWeight: 600 }}>{gs.group}</span>
                       </div>
-                      <span className="text-label-sm" style={{ color: 'var(--secondary)', fontWeight: 700 }}>{gs.collected}/{gs.total} ({rate}%)</span>
+                      <div style={{ textAlign: 'right' }}>
+                        <span className="text-label-sm" style={{ color: 'var(--secondary)', fontWeight: 700 }}>
+                          {formatINR(gs.collectedAmount, { showZero: true })} • {gs.collected}/{gs.total} ({rate}%)
+                        </span>
+                      </div>
                     </div>
                     <div className="progress-bar" style={{ height: '0.35rem' }}>
                       <div style={{ background: 'var(--secondary)', width: `${rate}%`, borderRadius: 9999, transition: 'width 0.5s' }} />
@@ -329,6 +429,11 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
                           <span className="text-headline-sm" style={{ color: 'var(--on-surface)', fontWeight: 600 }}>{ls.location}</span>
                           <p className="text-label-sm" style={{ color: 'var(--on-surface-variant)' }}>{ls.total} donor contacts</p>
                         </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <span className="text-label-sm" style={{ background: 'var(--secondary-fixed)', color: 'var(--on-secondary-fixed)', padding: '3px 8px', borderRadius: 4, fontWeight: 700 }}>
+                          {formatINR(ls.collectedAmount, { showZero: true })}
+                        </span>
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.375rem', background: 'rgba(229,238,255,0.5)', borderRadius: '0.5rem', padding: '0.5rem', textAlign: 'center', marginBottom: '0.625rem' }}>
