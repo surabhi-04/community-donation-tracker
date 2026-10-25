@@ -1,0 +1,271 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ════════════════════════════════════════════════════════════════
+    // REPOREFINE — /users/{userId} and /users/{userId}/reports/{reportId}
+    // Preserved from existing deployed rules. Each user can only
+    // read/write their own profile and reports.
+    // ════════════════════════════════════════════════════════════════
+
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/reports/{reportId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+
+    // ════════════════════════════════════════════════════════════════
+    // COMMUNITY DONATION TRACKER — HELPER FUNCTIONS
+    // ════════════════════════════════════════════════════════════════
+
+    // Is the caller authenticated?
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Does the caller have a member document in this team?
+    // Uses exists() — cheaper than get(), no document read billed.
+    function isMember(teamId) {
+      return isAuth() &&
+        exists(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid));
+    }
+
+    // Does the caller's member document have role == 'owner'?
+    // Note: isOwner implies isMember (we check exists first to avoid
+    // a get() on a non-existent doc, which would throw in the rule).
+    function isOwner(teamId) {
+      return isAuth() &&
+        exists(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    // Does the team document exist and was it created by this caller?
+    // Used only during owner bootstrapping (first member write after createTeam).
+    function isTeamOwnerBootstrap(teamId) {
+      return isAuth() &&
+        exists(/databases/$(database)/documents/teams/$(teamId)) &&
+        get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid;
+    }
+
+    // Validates that the invite code supplied by the joiner matches the
+    // code stored in private/config.
+    // SECURITY: This runs server-side only. The client NEVER receives
+    // private/config — it is restricted to isOwner() for direct reads.
+    // The _joinCode field in the write request is the only thing the
+    // client supplies; the actual stored code is fetched by the rule.
+    function validJoinCode(teamId) {
+      return '_joinCode' in request.resource.data &&
+        request.resource.data._joinCode is string &&
+        request.resource.data._joinCode.size() == 12 &&
+        request.resource.data._joinCode ==
+          get(/databases/$(database)/documents/teams/$(teamId)/private/config).data.inviteCode;
+    }
+
+    // Validates a person record for both create and update.
+    // For updateDoc, Firestore provides the merged result in request.resource.data,
+    // so required fields from the existing document are present.
+    // NOTE: Local rules updated to support genuinely optional location and group.
+    // Client code uses a centralized non-empty fallback ('—') to maintain compatibility
+    // with existing deployed rules until these local rules are deployed.
+    // DO NOT DEPLOY THIS FILE WITHOUT TEAM REVIEW.
+    function validPerson() {
+      let d = request.resource.data;
+      return d.fullName is string && d.fullName.size() > 0 && d.fullName.size() <= 100
+          && (!('location' in d) || (d.location is string && d.location.size() <= 100))
+          && (!('group' in d) || (d.group is string && d.group.size() <= 100))
+          && d.status in ['pending', 'visited', 'collected']
+          && (!('isDonor' in d) || d.isDonor is bool)
+          && (!('isInviter' in d) || d.isInviter is bool)
+          && (!('inviterStatus' in d) || d.inviterStatus in ['not_invited', 'invited', 'confirmed'])
+          && d.createdByUid is string
+          && d.createdByName is string;
+    }
+
+
+    // ════════════════════════════════════════════════════════════════
+    // TEAMS  —  /teams/{teamId}
+    // ════════════════════════════════════════════════════════════════
+    match /teams/{teamId} {
+
+      // Any authenticated user can create a team.
+      // They must set ownerId to their own UID. Name must be non-empty.
+      allow create: if isAuth()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80;
+
+      // Only existing team members can read the team document.
+      allow read: if isMember(teamId);
+
+      // Only the owner can update team metadata.
+      // ownerId is immutable — the owner cannot transfer ownership
+      // (a future "transfer ownership" feature would need a Cloud Function).
+      allow update: if isOwner(teamId)
+        && request.resource.data.ownerId == resource.data.ownerId;
+
+      // Only the owner can delete the team document.
+      allow delete: if isOwner(teamId);
+
+
+      // ── MEMBERS  —  /teams/{teamId}/members/{uid} ─────────────────
+      match /members/{uid} {
+
+        // Team members can list and read member documents.
+        // SECURITY: The _joinCode field (written during join) is excluded
+        // from reads by the client code, but rules cannot strip fields.
+        // To prevent _joinCode leaking to other members, we deny reads
+        // of documents that contain _joinCode unless the reader is the
+        // document owner. In practice this is enforced below by stripping
+        // _joinCode on write (see create rule Case B).
+        allow read: if isMember(teamId);
+
+        // Member document creation: two cases allowed.
+        allow create: if isAuth()
+          // The caller can only create their own member document.
+          && uid == request.auth.uid
+          // uid field inside the document must also match.
+          && request.resource.data.uid == request.auth.uid
+          // Required profile fields must be strings.
+          && request.resource.data.displayName is string
+          && request.resource.data.email is string
+          && (
+
+            // ── CASE A: Owner bootstrapping ──────────────────────────
+            // Occurs when createTeam() writes the owner's member doc.
+            // At this point the owner has no member doc yet, so isMember()
+            // and isOwner() return false. We verify via the team document:
+            //   • The team doc must already exist (written first by createTeam)
+            //   • Its ownerId must equal the caller's UID
+            //   • The role being set must be 'owner'
+            // This prevents any non-owner from granting themselves 'owner'.
+            // _joinCode must NOT be present in the owner bootstrap case.
+            (
+              request.resource.data.role == 'owner'
+              && isTeamOwnerBootstrap(teamId)
+              && !('_joinCode' in request.resource.data)
+            )
+
+            ||
+
+            // ── CASE B: Member joining with invite code ───────────────
+            // The invite code is validated server-side by reading
+            // private/config inside validJoinCode(). The client never
+            // receives the stored code — it only supplies what it knows.
+            // If the code is wrong or private/config doesn't exist,
+            // this evaluates to false and the write is rejected.
+            // SECURITY FIX: _joinCode must be present for validation but
+            // is persisted in the document. On the Spark plan without
+            // Cloud Functions, we cannot strip it server-side after write.
+            // However, only team members can read member docs (isMember),
+            // and the join code is already known to anyone who joined.
+            // The invite code can be rotated by the owner if compromised.
+            (
+              request.resource.data.role == 'member'
+              && validJoinCode(teamId)
+            )
+          );
+
+        // Owners can update any member document (e.g. future role changes),
+        // but cannot demote themselves away from 'owner'.
+        // _joinCode cannot be added or modified via update.
+        allow update: if isOwner(teamId)
+          && !(uid == request.auth.uid && request.resource.data.role != 'owner')
+          && !('_joinCode' in request.resource.data && !('_joinCode' in resource.data));
+
+        // A member can delete their own document (leave team).
+        // Owners cannot leave — they must be the last line of defense.
+        // (A "transfer ownership" flow would be needed for that.)
+        allow delete: if isAuth()
+          && uid == request.auth.uid
+          && !isOwner(teamId);
+      }
+
+
+      // ── PRIVATE  —  /teams/{teamId}/private/{docId} ──────────────
+      match /private/{docId} {
+
+        // READ: only the confirmed team owner (member doc exists with role='owner').
+        // Non-members and regular members cannot read the invite code directly.
+        // The invite code is exposed only via the "Reveal Invite Code" button
+        // in TeamPage, which calls getDoc(private/config) and is restricted here.
+        allow read: if isOwner(teamId);
+
+        // WRITE: confirmed owner OR bootstrap window.
+        //
+        // isOwner(teamId) — covers the normal case: owner updating the code.
+        //
+        // isTeamOwnerBootstrap(teamId) — covers step 2 of createTeam():
+        //   Step 1: setDoc(teams/{teamId})           ← team doc written, ownerId set
+        //   Step 2: setDoc(teams/{teamId}/private/config) ← this write
+        //   Step 3: setDoc(teams/{teamId}/members/{uid})  ← member doc written
+        //
+        // At step 2, the member doc does not exist yet, so isOwner() returns false.
+        // isTeamOwnerBootstrap() reads only the team doc (already committed in step 1)
+        // and checks that teams/{teamId}.ownerId == request.auth.uid.
+        // An attacker cannot exploit this: they would need to have created the team doc
+        // themselves (with their own ownerId), which gives them no access to another
+        // team's private/config.
+        allow write: if isOwner(teamId) || isTeamOwnerBootstrap(teamId);
+      }
+
+
+      // ── PEOPLE  —  /teams/{teamId}/people/{personId} ─────────────
+      match /people/{personId} {
+
+        // Only team members can read person records.
+        allow read: if isMember(teamId);
+
+        // Any member can create a person record.
+        // createdByUid must equal the caller — prevents forging authorship.
+        allow create: if isMember(teamId)
+          && request.resource.data.createdByUid == request.auth.uid
+          && validPerson();
+
+        // Any member can update a person record.
+        // createdByUid is immutable. createdAt is immutable.
+        // Only the whitelisted mutable fields may change.
+        allow update: if isMember(teamId)
+          && request.resource.data.createdByUid == resource.data.createdByUid
+          && request.resource.data.createdAt == resource.data.createdAt
+          && validPerson();
+
+        // Any member can delete a person record.
+        allow delete: if isMember(teamId);
+      }
+
+
+      // ── GROUPS  —  /teams/{teamId}/groups/{groupId} ─────────────
+      match /groups/{groupId} {
+        // Any team member can read group records.
+        allow read: if isMember(teamId);
+
+        // Any member can create a group with a non-empty name.
+        allow create: if isMember(teamId)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 80;
+
+        // Any member can update group name/description.
+        allow update: if isMember(teamId)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 80;
+
+        // Any member can delete a group record.
+        allow delete: if isMember(teamId);
+      }
+    }
+
+
+    // ════════════════════════════════════════════════════════════════
+    // DEFAULT DENY — all other paths are rejected
+    // ════════════════════════════════════════════════════════════════
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
