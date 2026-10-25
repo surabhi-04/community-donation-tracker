@@ -37,3 +37,6 @@ dist-ssr
 *-backup
 
 
+
+.vercel
+.env*
